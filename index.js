@@ -1,56 +1,204 @@
 require("dotenv/config");
 const http = require("node:http");
 const mineflayer = require("mineflayer");
+const { initiateServer } = require("./server.js");
+const Vec3 = require("vec3");
+const {
+  pathfinder,
+  Movements,
+  goals: { GoalNear },
+} = require("mineflayer-pathfinder");
 
-const { goals } = require("mineflayer-pathfinder");
-
-// Bot reference
+// Area Configuration
+const MIN_CORNER = new Vec3(-306, 183, -14);
+const MAX_CORNER = new Vec3(-297, 185, -4);
 let bot = null;
+let goingToSleep = false;
 let lastActivity = Date.now();
+let serverCheckAttempts = 0;
 
-// Create the bot once when the file runs
-bot = mineflayer.createBot({
-  host: process.env.host,
-  port: parseInt(process.env.port),
-  username: process.env.name,
-  version: "1.21.4",
-  auth: "offline",
-  checkTimeoutInterval: 30000,
-  hideErrors: false,
-});
+async function checkServer() {
+  const server = await initiateServer();
+  serverCheckAttempts++;
+  if (!server || !server.success) {
+    console.log("server error:", server?.error);
+    if (serverCheckAttempts < 5) {
+      console.log("retrying to initiate the server");
+      checkServer();
+    }
+    console.log("stopping server initiation.");
+    return;
+  } else {
+    serverCheckAttempts = 0;
+    console.log("Bot will join server in few seconds");
+    setTimeout(createBot, 15000);
+  }
+}
 
-// Set up event listeners
-bot.once("connect", () => {
-  console.log(`Connected to ${process.env.host}:${process.env.port}`);
-});
+checkServer();
 
-bot.once("spawn", () => {
-  console.log("Bot successfully spawned in world");
-  scheduleRandomActivity();
-});
+function createBot() {
+  bot = mineflayer.createBot({
+    host: process.env.host,
+    port: parseInt(process.env.port),
+    username: process.env.name,
+    version: "1.21.4",
+    auth: "offline",
+    checkTimeoutInterval: 60000,
+    connectTimeout: 30000,
+    keepAlive: true,
+  });
 
-// Error handling
-bot.on("error", (err) => {
-  console.log(`Connection error: ${err.message}`);
-});
+  bot.loadPlugin(pathfinder);
 
-bot.on("end", () => {
-  console.log("Bot session ended");
-});
+  bot.once("spawn", () => {
+    console.log("Bot spawned!");
+    setupPathfinder();
+    handleSleep();
+    scheduleRandomActivity();
+  });
 
-bot.on("kicked", (reason) => {
-  console.log(`Kicked: ${JSON.stringify(reason)}`);
-});
+  bot.on("error", (err) => console.log("Bot error:", err));
+  bot.on("kicked", (reason) => {
+    console.log(`Kicked: ${JSON.stringify(reason)}`);
+    checkServer();
+  });
+  bot.on("end", (err) => {
+    console.log("Bot has disconnected from the server");
+    checkServer();
+  });
+}
 
-// Activities System
+function setupPathfinder() {
+  const movements = new Movements(bot, bot.registry);
+  movements.allowFreeMotion = false;
+  movements.allowParkour = true;
+  movements.allow1by1towers = true;
+
+  movements.isPositionAllowed = (pos) =>
+    pos.x >= MIN_CORNER.x - 1 &&
+    pos.x <= MAX_CORNER.x + 1 &&
+    pos.y >= MIN_CORNER.y - 1 &&
+    pos.y <= MAX_CORNER.y + 1 &&
+    pos.z >= MIN_CORNER.z - 1 &&
+    pos.z <= MAX_CORNER.z + 1;
+
+  bot.pathfinder.setMovements(movements);
+}
+
+function handleSleep() {
+  setInterval(async () => {
+    if (!bot || goingToSleep) return;
+
+    const dayTime = bot.time.timeOfDay;
+    if (dayTime >= 13000 && dayTime <= 23000) {
+      goingToSleep = true;
+      try {
+        let bed = bot.findBlock({
+          matching: (block) => bot.isABed(block),
+          maxDistance: 9,
+        });
+
+        if (bed) {
+          const moveTo = bed.position.offset(0, 0, 1);
+          await bot.pathfinder.goto(
+            new GoalNear(moveTo.x, moveTo.y, moveTo.z, 1)
+          );
+          await bot.lookAt(bed.position.offset(0.5, 0.5, 0.5));
+          await bot.sleep(bed);
+          console.log("Bot is sleeping on existing bed.");
+        } else {
+          console.log("No bed nearby. Checking inventory to place bed...");
+
+          const bedItem = bot.inventory
+            .items()
+            .find((item) => item.name.includes("bed"));
+
+          if (bedItem) {
+            const placementPos = findSafePlacementPosition();
+
+            if (!placementPos) {
+              console.log("No safe position to place the bed.");
+            } else {
+              await bot.equip(bedItem, "hand");
+              await bot.placeBlock(
+                bot.blockAt(placementPos.offset(0, -1, 0)),
+                new Vec3(0, 1, 0)
+              ); // place on top of block under target
+              console.log("Placed bed at", placementPos);
+
+              // Wait a tick or two for world to update
+              await new Promise((res) => setTimeout(res, 1000));
+
+              const placedBed = bot.findBlock({
+                matching: (block) => bot.isABed(block),
+                maxDistance: 4,
+              });
+
+              if (placedBed) {
+                const moveTo = placedBed.position.offset(0, 0, 1);
+                await bot.pathfinder.goto(
+                  new GoalNear(moveTo.x, moveTo.y, moveTo.z, 1)
+                );
+                await bot.lookAt(placedBed.position.offset(0.5, 0.5, 0.5));
+                await bot.sleep(placedBed);
+                console.log("Bot is sleeping on newly placed bed.");
+              } else {
+                console.log("Failed to detect newly placed bed.");
+              }
+            }
+          } else {
+            console.log("No bed item in inventory.");
+          }
+        }
+      } catch (err) {
+        console.log("Sleep error:", err.message);
+      } finally {
+        goingToSleep = false;
+      }
+    }
+  }, 15000);
+}
+
+function findSafePlacementPosition() {
+  const botPos = bot.entity.position.floored();
+
+  const offsets = [
+    new Vec3(1, 0, 0),
+    new Vec3(-1, 0, 0),
+    new Vec3(0, 0, 1),
+    new Vec3(0, 0, -1),
+  ];
+
+  for (const offset of offsets) {
+    const pos = botPos.plus(offset);
+    const blockBelow = bot.blockAt(pos.offset(0, -1, 0));
+    const blockAtPos = bot.blockAt(pos);
+    const blockAbove = bot.blockAt(pos.offset(0, 1, 0));
+
+    if (
+      blockBelow &&
+      blockBelow.boundingBox === "block" && // solid ground
+      blockAtPos &&
+      blockAtPos.name === "air" && // empty space
+      blockAbove &&
+      blockAbove.name === "air"
+    ) {
+      return pos;
+    }
+  }
+
+  return null;
+}
+
 function scheduleRandomActivity() {
-  // More human-like variable timing between 10-30 seconds
-  let delay = Math.floor(Math.random() * (30000 - 10000 + 1)) + 10000;
+  const maxDelay = 120 * 10000;
+  const minDelay = 60 * 10000;
 
-  // Check for inactivity - if no activity for 2 minutes, force an action sooner
+  let delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
   if (Date.now() - lastActivity > 120000) {
-    delay = 5000; // Force activity sooner
-    console.log("Bot has been idle too long, scheduling activity soon");
+    delay = 5000;
+    console.log("Idle too long, triggering activity.");
   }
 
   setTimeout(() => {
@@ -61,177 +209,50 @@ function scheduleRandomActivity() {
 }
 
 function performRandomActivity() {
-  // Only keep chat, jump, and move activities
-  const actions = [doRandomChat, doRandomJump, doRandomMove];
+  if (bot.isSleeping || goingToSleep) return;
 
+  const activities = [doRandomChat, doRandomJump, doRandomMove];
   try {
-    const randomAction = actions[Math.floor(Math.random() * actions.length)];
-    randomAction();
+    const activity = activities[Math.floor(Math.random() * activities.length)];
+    activity();
     lastActivity = Date.now();
   } catch (err) {
-    console.log(`Error in performRandomActivity: ${err.message}`);
+    console.log("Activity error:", err.message);
   }
 }
 
 function doRandomChat() {
   const messages = [
-    "Hello there!",
-    "Beautiful day in Minecraft!",
-    "Just exploring around",
-    "This area looks nice",
-    "Anyone online?",
-    "Having fun in the game",
+    "Hello world!",
+    "What's up?",
+    "Living the cube life.",
+    "Just chilling here.",
+    "Where are my diamonds?",
+    "noob!",
   ];
-  try {
-    bot.chat(messages[Math.floor(Math.random() * messages.length)]);
-    console.log("Bot sent a chat message");
-  } catch (err) {
-    console.log(`Chat error: ${err.message}`);
-  }
+  bot.chat(messages[Math.floor(Math.random() * messages.length)]);
+  console.log("Bot chatted.");
 }
 
 function doRandomJump() {
-  console.log("Bot performed a jump");
-  try {
-    // More natural jumping pattern - sometimes single jumps, sometimes multiple
-    const jumps = Math.floor(Math.random() * 3) + 1;
-    let count = 0;
-    const jumpInterval = setInterval(() => {
-      try {
-        bot.setControlState("jump", true);
-        setTimeout(() => {
-          try {
-            bot.setControlState("jump", false);
-          } catch (e) {
-            console.log(`Error ending jump: ${e.message}`);
-          }
-        }, 300);
-      } catch (e) {
-        console.log(`Error setting jump: ${e.message}`);
-      }
-
-      if (++count >= jumps) clearInterval(jumpInterval);
-    }, 1000);
-  } catch (err) {
-    console.log(`Jump error: ${err.message}`);
-  }
+  const jumps = Math.floor(Math.random() * 3) + 1;
+  let count = 0;
+  const jumpInterval = setInterval(() => {
+    bot.setControlState("jump", true);
+    setTimeout(() => bot.setControlState("jump", false), 300);
+    count++;
+    if (count >= jumps) clearInterval(jumpInterval);
+  }, 600);
 }
 
 function doRandomMove() {
   const directions = ["forward", "back", "left", "right"];
-  const dir = directions[Math.floor(Math.random() * 4)];
+  const dir = directions[Math.floor(Math.random() * directions.length)];
+  const duration = Math.floor(Math.random() * 3000) + 1000;
 
-  try {
-    // Calculate target yaw based on direction
-    let yawOffset = 0;
-    switch (dir) {
-      case "back":
-        yawOffset = Math.PI; // 180 degrees
-        break;
-      case "left":
-        yawOffset = Math.PI / 2; // 90 degrees left
-        break;
-      case "right":
-        yawOffset = -Math.PI / 2; // 90 degrees right
-        break;
-      // forward remains 0
-    }
-
-    // Calculate target orientation
-    const currentYaw = bot.entity.yaw;
-    let targetYaw = currentYaw + yawOffset;
-
-    // Normalize yaw to [-π, π]
-    targetYaw = ((targetYaw + Math.PI) % (Math.PI * 2)) - Math.PI;
-
-    // Add some randomness to walking duration for more human-like behavior
-    const walkDuration = Math.floor(Math.random() * 3000) + 1000; // 1-4 seconds
-    console.log(`Bot moving ${dir} for ${walkDuration}ms`);
-
-    // Face direction first
-    bot
-      .look(targetYaw, 0, false)
-      .then(() => {
-        // Move forward after facing direction
-        bot.setControlState("forward", true);
-        setTimeout(() => {
-          try {
-            bot.setControlState("forward", false);
-          } catch (e) {
-            console.log(`Error stopping movement: ${e.message}`);
-          }
-        }, walkDuration);
-      })
-      .catch((err) => {
-        console.log("Turn error:", err.message);
-      });
-  } catch (err) {
-    console.log(`Move error: ${err.message}`);
-  }
+  bot.setControlState(dir, true);
+  setTimeout(() => {
+    bot.setControlState(dir, false);
+    console.log(`Moved ${dir} for ${duration}ms`);
+  }, duration);
 }
-
-// Handle chat messages from other players
-bot.on("chat", (username, message) => {
-  // Ignore messages from the bot itself
-  if (username === bot.username) return;
-
-  console.log(`${username}: ${message}`);
-
-  // Simple command handling
-  if (message.toLowerCase() === "hello") {
-    bot.chat(`Hello, ${username}!`);
-  } else if (message.toLowerCase() === "jump") {
-    doRandomJump();
-    bot.chat("Jumping!");
-  } else if (message.toLowerCase() === "spin") {
-    doRandomSpin();
-  }
-});
-
-function doRandomSpin() {
-  console.log("Bot is spinning around");
-  try {
-    let currentRotation = 0;
-    const spinInterval = setInterval(() => {
-      if (currentRotation >= Math.PI * 2) {
-        clearInterval(spinInterval);
-        return;
-      }
-      currentRotation += Math.PI / 8;
-      bot.look(currentRotation, 0, false);
-    }, 200);
-    bot.chat("Spinning around!");
-  } catch (err) {
-    console.log(`Spin error: ${err.message}`);
-  }
-}
-
-function startHttpServer() {
-  const PORT = process.env.server_port || 3000;
-
-  http
-    .createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("Bot is alive!\n");
-    })
-    .listen(PORT, () => {
-      console.log(`HTTP Server running on port ${PORT}`);
-    });
-}
-
-function startSelfPing() {
-  const url = process.env.SELF_URL;
-
-  setInterval(() => {
-    if (url) {
-      fetch(url)
-        .then((res) => console.log(`Self-ping success: ${res.status}`))
-        .catch((err) => console.log(`Self-ping error: ${err.message}`));
-    } else {
-      console.log("SELF_URL not set in environment.");
-    }
-  }, 12 * 60 * 1000);
-}
-
-startHttpServer();
-startSelfPing();
