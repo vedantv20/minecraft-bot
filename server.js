@@ -100,11 +100,11 @@ async function logInToAternos() {
         console.log("Logged in using cookies");
         return true;
       }
-      // console.log("⚠️ Saved cookies invalid, falling back to login");
+      console.log("⚠️⚠️⚠️ Saved cookies invalid, falling back to login");
       // fs.unlinkSync(COOKIE_PATH);
     } catch (err) {
       console.warn("Error using saved cookies:", err.message);
-      fs.unlinkSync(COOKIE_PATH);
+      // fs.unlinkSync(COOKIE_PATH);
     }
   }
 
