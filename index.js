@@ -35,8 +35,6 @@ async function checkServer() {
   }
 }
 
-checkServer();
-
 function createBot() {
   bot = mineflayer.createBot({
     host: process.env.host,
@@ -256,3 +254,32 @@ function doRandomMove() {
     console.log(`Moved ${dir} for ${duration}ms`);
   }, duration);
 }
+
+function createHttpServer() {
+  const PORT = process.env.server_port || 3000;
+  http
+    .createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("Bot is alive!\n");
+    })
+    .listen(PORT, () => {
+      console.log(`HTTP Server running on port ${PORT}`);
+    });
+}
+
+function startSelfPing() {
+  const url = process.env.SELF_URL;
+
+  setInterval(() => {
+    if (url) {
+      fetch(url)
+        .then((res) => console.log(`Self-ping success: ${res.status}`))
+        .catch((err) => console.log(`Self-ping error: ${err.message}`));
+    } else {
+      console.log("SELF_URL not set in environment.");
+    }
+  }, 12 * 60 * 1000);
+}
+
+createHttpServer();
+startSelfPing();

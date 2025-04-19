@@ -4,7 +4,6 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "postinstall": "npx puppeteer browsers install chrome",
     "start": "node index.js"
   },
   "keywords": [],
@@ -12,10 +11,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "chrome-aws-lambda": "^10.1.0",
     "dotenv": "^16.5.0",
     "minecraft-data": "^3.85.0",
     "mineflayer": "^4.27.0",
     "mineflayer-pathfinder": "^2.4.5",
-    "puppeteer": "^24.6.1"
+    "puppeteer-core": "^24.6.1"
+  },
+  "engines": {
+    "node": "16.x"
   }
 }

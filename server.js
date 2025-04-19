@@ -1,5 +1,6 @@
 require("dotenv/config");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
+const chromium = require("chrome-aws-lambda");
 const fs = require("fs");
 const path = require("path");
 
@@ -73,18 +74,28 @@ async function logInToAternos() {
     throw new Error("Missing Aternos credentials in environment variables");
   }
 
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH || (await chromium.executablePath);
+
   browser = await puppeteer.launch({
-    headless: true,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
       "--disable-web-security",
       "--disable-features=IsolateOrigins,site-per-process",
-      "--window-size=1920,1080",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--single-process",
+      "--disable-gpu",
     ],
     defaultViewport: { width: 1920, height: 1080 },
-    executablePath: puppeteer.executablePath(),
+    executablePath: executablePath,
+    headless: true,
+    ignoreHTTPSErrors: true,
   });
+
   page = await browser.newPage();
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
