@@ -2,16 +2,7 @@ require("dotenv/config");
 const http = require("node:http");
 const mineflayer = require("mineflayer");
 
-const Vec3 = require("vec3");
-const {
-  pathfinder,
-  Movements,
-  goals: { GoalNear },
-} = require("mineflayer-pathfinder");
-
-// Area Configuration
-const MIN_CORNER = new Vec3(-306, 183, -10);
-const MAX_CORNER = new Vec3(-297, 185, 1);
+const { goals } = require("mineflayer-pathfinder");
 
 // Bot reference
 let bot = null;
@@ -28,9 +19,6 @@ bot = mineflayer.createBot({
   hideErrors: false,
 });
 
-// Load plugins
-bot.loadPlugin(pathfinder);
-
 // Set up event listeners
 bot.once("connect", () => {
   console.log(`Connected to ${process.env.host}:${process.env.port}`);
@@ -38,7 +26,6 @@ bot.once("connect", () => {
 
 bot.once("spawn", () => {
   console.log("Bot successfully spawned in world");
-  setupPathfinder();
   scheduleRandomActivity();
 });
 
@@ -54,23 +41,6 @@ bot.on("end", () => {
 bot.on("kicked", (reason) => {
   console.log(`Kicked: ${JSON.stringify(reason)}`);
 });
-
-function setupPathfinder() {
-  const movements = new Movements(bot, bot.registry);
-  movements.allowFreeMotion = false;
-  movements.allowParkour = true;
-  movements.allow1by1towers = true;
-
-  movements.isPositionAllowed = (pos) =>
-    pos.x >= MIN_CORNER.x - 1 &&
-    pos.x <= MAX_CORNER.x + 1 &&
-    pos.y >= MIN_CORNER.y - 1 &&
-    pos.y <= MAX_CORNER.y + 1 &&
-    pos.z >= MIN_CORNER.z - 1 &&
-    pos.z <= MAX_CORNER.z + 1;
-
-  bot.pathfinder.setMovements(movements);
-}
 
 // Activities System
 function scheduleRandomActivity() {
