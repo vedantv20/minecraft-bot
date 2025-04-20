@@ -1,4 +1,8 @@
 .env
+<<<<<<< HEAD
 .cache/
 node_modules
 .env
+=======
+node_modules
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee

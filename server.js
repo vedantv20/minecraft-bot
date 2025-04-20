@@ -1,5 +1,11 @@
+<<<<<<< HEAD
 require("dotenv").config();
 const puppeteer = require("puppeteer");
+=======
+require("dotenv/config");
+const puppeteer = require("puppeteer-core");
+const chromium = require("chrome-aws-lambda");
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
 const fs = require("fs");
 const path = require("path");
 
@@ -73,12 +79,19 @@ async function logInToAternos() {
     throw new Error("Missing Aternos credentials in environment variables");
   }
 
+<<<<<<< HEAD
   console.log("Launching browser...");
   browser = await puppeteer.launch({
     executablePath:
       process.env.NODE_ENV === "production"
         ? process.env.PUPPETEER_EXECUTABLE_PATH
         : puppeteer.executablePath(),
+=======
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH || (await chromium.executablePath);
+
+  browser = await puppeteer.launch({
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -86,11 +99,22 @@ async function logInToAternos() {
       "--disable-web-security",
       "--disable-features=IsolateOrigins,site-per-process",
       "--disable-accelerated-2d-canvas",
+<<<<<<< HEAD
+=======
+      "--no-first-run",
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
       "--no-zygote",
       "--single-process",
       "--disable-gpu",
     ],
+<<<<<<< HEAD
     headless: true,
+=======
+    defaultViewport: { width: 1920, height: 1080 },
+    executablePath: executablePath,
+    headless: true,
+    ignoreHTTPSErrors: true,
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
   });
 
   page = await browser.newPage();
@@ -287,6 +311,15 @@ async function confirmServerActiviation() {
     await page.click("#confirm");
     console.log("✅ Confirmation clicked");
     await delay(2000);
+<<<<<<< HEAD
+=======
+
+    // // Start button
+    // await page.waitForSelector("#start", { timeout: 30000 });
+    // await page.click("#start");
+    // console.log("▶️ Start clicked");
+
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
     return "success";
   } catch (err) {
     console.log("Activation failed:", err.message);
@@ -295,6 +328,7 @@ async function confirmServerActiviation() {
 }
 
 async function monitorStartingPhase() {
+<<<<<<< HEAD
   const status = await getCurrentStatus();
   console.log(`current status: ${status}`);
   serverInfo.status = status;
@@ -310,6 +344,27 @@ async function monitorStartingPhase() {
   }
 
   await delay(10000);
+=======
+  const MAX_CHECKS = 10;
+  for (let i = 0; i < MAX_CHECKS; i++) {
+    const s = await getCurrentStatus();
+    console.log(`Monitor ${i + 1}/${MAX_CHECKS}: ${s}`);
+    serverInfo.status = s;
+
+    if (s === "online") {
+      console.log("🎉 Server is now ONLINE!");
+      serverInfo.success = true;
+      return "online";
+    }
+    if (s === "offline") {
+      console.log("⚠️ Server went offline during preparing");
+      return "offline";
+    }
+
+    await delay(30000);
+  }
+  console.log("⏲️ Monitor timed out (5min)");
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
   return serverInfo.status;
 }
 

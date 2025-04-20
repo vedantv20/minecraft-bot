@@ -9,6 +9,10 @@ const {
   goals: { GoalNear },
 } = require("mineflayer-pathfinder");
 
+<<<<<<< HEAD
+=======
+// Area Configuration
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
 const MIN_CORNER = new Vec3(-306, 183, -14);
 const MAX_CORNER = new Vec3(-297, 185, -4);
 let bot = null;
@@ -56,6 +60,7 @@ function createBot() {
   });
 
   bot.on("error", (err) => console.log("Bot error:", err));
+<<<<<<< HEAD
 
   bot.on("kicked", (reason) => {
     console.log(`Kicked: ${JSON.stringify(reason)}`);
@@ -66,6 +71,11 @@ function createBot() {
       console.log("trying to unban the bot...");
       checkServer();
     }
+=======
+  bot.on("kicked", (reason) => {
+    console.log(`Kicked: ${JSON.stringify(reason)}`);
+    checkServer();
+>>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
   });
   bot.on("end", (err) => {
     console.log("Bot has disconnected from the server");
