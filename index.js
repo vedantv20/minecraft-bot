@@ -9,78 +9,224 @@ const {
   goals: { GoalNear },
 } = require("mineflayer-pathfinder");
 
-<<<<<<< HEAD
-=======
-// Area Configuration
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
 const MIN_CORNER = new Vec3(-306, 183, -14);
 const MAX_CORNER = new Vec3(-297, 185, -4);
 let bot = null;
 let goingToSleep = false;
 let lastActivity = Date.now();
 let serverCheckAttempts = 0;
+let isShuttingDown = false;
+let isConnecting = false; // Track connection state
+let connectionTimeout = null; // Track connection timeout
+let sleepInterval = null;
+let activityInterval = null;
+
+// Handle graceful shutdown
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+function gracefulShutdown() {
+  console.log("Received shutdown signal");
+  isShuttingDown = true;
+  if (sleepInterval) clearInterval(sleepInterval);
+  if (activityInterval) clearInterval(activityInterval);
+  if (connectionTimeout) {
+    // Clear any pending timers
+    clearTimeout(connectionTimeout);
+    connectionTimeout = null;
+  }
+
+  if (bot) {
+    console.log("Disconnecting bot...");
+    try {
+      bot.quit();
+    } catch (err) {
+      console.error("Error disconnecting bot:", err);
+    }
+  }
+
+  // Force exit after 5 seconds if still running
+  setTimeout(() => {
+    console.log("Forcing exit after timeout");
+    process.exit(0);
+  }, 5000);
+}
 
 async function checkServer() {
-  const server = await initiateServer();
-  serverCheckAttempts++;
-  if (!server || !server.success) {
-    console.log("server error:", server?.error);
-    if (serverCheckAttempts < 5) {
-      console.log("retrying to initiate the server");
-      checkServer();
+  if (isShuttingDown || isConnecting) return;
+
+  isConnecting = true;
+  try {
+    const server = await initiateServer();
+    serverCheckAttempts++;
+    if (!server || !server.success) {
+      console.log("server error:", server?.error);
+      if (serverCheckAttempts < 5) {
+        console.log("retrying to initiate the server");
+        connectionTimeout = setTimeout(() => {
+          isConnecting = false;
+          checkServer();
+        }, 30000); // Add delay between retries
+      } else {
+        console.log("stopping server initiation.");
+
+        // Reset attempt counter and retry after longer delay
+        serverCheckAttempts = 0;
+        connectionTimeout = setTimeout(() => {
+          isConnecting = false;
+          checkServer();
+        }, 5 * 60 * 1000); // 5 minutes
+      }
+    } else {
+      serverCheckAttempts = 0;
+      console.log("Bot will join the server in few seconds");
+      connectionTimeout = setTimeout(() => {
+        isConnecting = false;
+        createBot();
+      }, 25000);
     }
-    console.log("stopping server initiation.");
-    return;
-  } else {
-    serverCheckAttempts = 0;
-    console.log("Bot will join server in few seconds");
-    setTimeout(createBot, 15000);
+  } catch (error) {
+    console.error("Unexpected error in checkServer:", error);
+    isConnecting = false;
+    connectionTimeout = setTimeout(checkServer, 60000);
   }
 }
 
 function createBot() {
-  bot = mineflayer.createBot({
-    host: process.env.host,
-    port: parseInt(process.env.port),
-    username: process.env.name,
-    version: "1.21.4",
-    auth: "offline",
-    checkTimeoutInterval: 60000,
-    connectTimeout: 30000,
-    keepAlive: true,
-  });
-
-  bot.loadPlugin(pathfinder);
-
-  bot.once("spawn", () => {
-    console.log("Bot spawned!");
-    setupPathfinder();
-    handleSleep();
-    scheduleRandomActivity();
-  });
-
-  bot.on("error", (err) => console.log("Bot error:", err));
-<<<<<<< HEAD
-
-  bot.on("kicked", (reason) => {
-    console.log(`Kicked: ${JSON.stringify(reason)}`);
-    if (
-      JSON.parse(reason).value.translate.value ===
-      "multiplayer.disconnect.banned"
-    ) {
-      console.log("trying to unban the bot...");
-      checkServer();
+  if (isShuttingDown) return;
+  if (bot) {
+    // Ensure previous bot instance is properly terminated
+    try {
+      console.log("Bot already exists, disconnecting the previous instance.");
+      bot.quit();
+    } catch (err) {
+      console.log("Error disconnecting previous bot instance:", err);
     }
-=======
-  bot.on("kicked", (reason) => {
-    console.log(`Kicked: ${JSON.stringify(reason)}`);
-    checkServer();
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
-  });
-  bot.on("end", (err) => {
-    console.log("Bot has disconnected from the server");
-    checkServer();
-  });
+    bot = null;
+  }
+
+  try {
+    bot = mineflayer.createBot({
+      host: process.env.host,
+      port: parseInt(process.env.port),
+      username: process.env.name,
+      version: "1.21.4",
+      auth: "offline",
+      checkTimeoutInterval: 30000,
+      connectTimeout: 45000,
+      keepAlive: true,
+      closeTimeout: 45000,
+      physicEnabled: true,
+      reconnect: false,
+      minTimeout: 5000,
+      maxTimeout: 30000,
+    });
+
+    bot.loadPlugin(pathfinder);
+    let hasSpawned = false;
+
+    // After bot spawns
+    bot.once("spawn", () => {
+      hasSpawned = true;
+      console.log("Bot spawned!");
+      setupPathfinder();
+      handleSleep();
+      performRandomActivity();
+      scheduleRandomActivity();
+    });
+    // Add timeout for initial connection
+    const spawnTimeout = setTimeout(() => {
+      if (!hasSpawned && bot) {
+        console.log("Bot spawn timeout - force disconnecting");
+        try {
+          bot.quit();
+        } catch (err) {
+          console.log("Error in spawn timeout disconnect:", err);
+        }
+        bot = null;
+        setTimeout(checkServer, 30000);
+      }
+    }, 60000);
+
+    bot.on("error", (err) => {
+      console.log("Bot error:", err);
+      clearTimeout(spawnTimeout);
+      if (!isShuttingDown) {
+        // Don't attempt reconnection during shutdown
+        setTimeout(checkServer, 30000);
+      }
+    });
+
+    bot.on("kicked", (reason) => {
+      console.log(
+        `Kicked: ${
+          typeof reason === "object" ? JSON.stringify(reason) : reason
+        }`
+      );
+      clearTimeout(spawnTimeout);
+
+      try {
+        // Handle different types of kick reasons
+        if (typeof reason === "string") {
+          let parsedReason;
+          try {
+            parsedReason = JSON.parse(reason);
+          } catch {
+            // If not JSON, use the string directly
+            parsedReason = reason;
+          }
+
+          // Check for duplicate login specifically
+          if (
+            reason.includes("duplicate_login") ||
+            parsedReason?.value?.translate?.value ===
+              "multiplayer.disconnect.duplicate_login"
+          ) {
+            console.log(
+              "Detected duplicate login, waiting longer before reconnecting..."
+            );
+            setTimeout(checkServer, 2 * 60 * 1000); // Wait 2 minutes
+            return;
+          }
+
+          // Handle ban case
+          if (
+            parsedReason?.value?.translate?.value ===
+            "multiplayer.disconnect.banned"
+          ) {
+            console.log("trying to unban the bot...");
+            // setTimeout(checkServer, 45000);
+            return;
+          }
+        }
+
+        // Default handling for other kick reasons
+        setTimeout(checkServer, 45000);
+      } catch (err) {
+        console.log("Error parsing kick reason:", err.message);
+        setTimeout(checkServer, 45000);
+      }
+    });
+
+    // Enhance error handling in the bot.on("end") handler
+    bot.on("end", (reason) => {
+      console.log("Bot has disconnected from the server:", reason);
+      clearTimeout(spawnTimeout);
+      if (!isShuttingDown) {
+        // Add progressive delay based on reason
+        let delay = 45000;
+        if (reason === "socketClosed") {
+          delay = 60000; // Longer delay for connection issues
+          console.log("Socket closed, will reconnect with longer delay");
+        }
+        console.log(`Will attempt reconnection in ${delay / 1000} seconds`);
+        setTimeout(checkServer, delay);
+      }
+    });
+  } catch (err) {
+    console.error("Error creating bot:", err);
+    setTimeout(checkServer, 60000); // Retry after 1 minute
+  }
 }
 
 function setupPathfinder() {
@@ -101,8 +247,19 @@ function setupPathfinder() {
 }
 
 function handleSleep() {
-  setInterval(async () => {
-    if (!bot || goingToSleep) return;
+  sleepInterval = setInterval(async () => {
+    if (
+      !bot ||
+      goingToSleep ||
+      isShuttingDown ||
+      !bot.entity ||
+      bot.isSleeping
+    ) {
+      if (isShuttingDown) {
+        clearInterval(sleepInterval);
+      }
+      return;
+    }
 
     const dayTime = bot.time.timeOfDay;
     if (dayTime >= 13000 && dayTime <= 23000) {
@@ -175,6 +332,8 @@ function handleSleep() {
 }
 
 function findSafePlacementPosition() {
+  if (!bot || !bot.entity) return null;
+
   const botPos = bot.entity.position.floored();
 
   const offsets = [
@@ -206,25 +365,44 @@ function findSafePlacementPosition() {
 }
 
 function scheduleRandomActivity() {
-  const maxDelay = 120 * 10000;
-  const minDelay = 60 * 10000;
+  if (isShuttingDown) return;
+
+  // Clear any existing interval
+  if (activityInterval) {
+    clearInterval(activityInterval);
+    activityInterval = null;
+  }
+
+  const maxDelay = 100 * 1000;
+  const minDelay = 50 * 1000;
 
   let delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+  // If bot has been inactive for too long, act quickly
   if (Date.now() - lastActivity > 120000) {
-    delay = 5000;
+    delay = 3000;
     console.log("Idle too long, triggering activity.");
   }
 
+  console.log(`Scheduling random activity in ${delay / 1000} seconds`);
+
+  // Setting timeout (not interval) to perform activity once
   setTimeout(() => {
-    if (!bot) return;
     performRandomActivity();
-    scheduleRandomActivity();
+    // Re-schedule another activity
+    if (!isShuttingDown && bot && bot.entity) {
+      scheduleRandomActivity();
+    }
   }, delay);
 }
 
 function performRandomActivity() {
-  if (bot.isSleeping || goingToSleep) return;
+  if (!bot || !bot.entity || bot.isSleeping || goingToSleep || isShuttingDown) {
+    console.log("Cannot perform activity - bot unavailable or sleeping");
+    return;
+  }
 
+  console.log("Performing a random activity now");
   const activities = [doRandomChat, doRandomJump, doRandomMove];
   try {
     const activity = activities[Math.floor(Math.random() * activities.length)];
@@ -236,6 +414,8 @@ function performRandomActivity() {
 }
 
 function doRandomChat() {
+  console.log("Chatting...");
+  if (!bot) return;
   const messages = [
     "Hello world!",
     "What's up?",
@@ -249,23 +429,37 @@ function doRandomChat() {
 }
 
 function doRandomJump() {
+  console.log("Jumping...");
+  if (!bot || !bot.entity) return;
+
   const jumps = Math.floor(Math.random() * 3) + 1;
   let count = 0;
   const jumpInterval = setInterval(() => {
+    if (!bot || isShuttingDown || !bot.entity) {
+      clearInterval(jumpInterval);
+      return;
+    }
+
     bot.setControlState("jump", true);
-    setTimeout(() => bot.setControlState("jump", false), 300);
+    setTimeout(() => {
+      if (bot && bot.entity) bot.setControlState("jump", false);
+    }, 300);
     count++;
     if (count >= jumps) clearInterval(jumpInterval);
   }, 600);
 }
 
 function doRandomMove() {
+  console.log("Moving...");
+  if (!bot || !bot.entity) return;
+
   const directions = ["forward", "back", "left", "right"];
   const dir = directions[Math.floor(Math.random() * directions.length)];
   const duration = Math.floor(Math.random() * 3000) + 1000;
 
   bot.setControlState(dir, true);
   setTimeout(() => {
+    if (!bot || isShuttingDown || !bot.entity) return;
     bot.setControlState(dir, false);
     console.log(`Moved ${dir} for ${duration}ms`);
   }, duration);
@@ -273,20 +467,33 @@ function doRandomMove() {
 
 function createHttpServer() {
   const PORT = process.env.server_port || 3000;
-  http
+  const server = http
     .createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("Bot is alive!\n");
+      const status = bot ? "connected" : "disconnected";
+      res.end(`Bot is alive! Status: ${status}\n`);
     })
     .listen(PORT, () => {
       console.log(`HTTP Server running on port ${PORT}`);
     });
+
+  // Handle server shutdown
+  process.on("SIGINT", () => {
+    server.close();
+  });
+  process.on("SIGTERM", () => {
+    server.close();
+  });
 }
 
 function startSelfPing() {
   const url = process.env.SELF_URL;
+  const pingInterval = setInterval(() => {
+    if (isShuttingDown) {
+      clearInterval(pingInterval);
+      return;
+    }
 
-  setInterval(() => {
     if (url) {
       fetch(url)
         .then((res) => console.log(`Self-ping success: ${res.status}`))
@@ -299,3 +506,4 @@ function startSelfPing() {
 
 createHttpServer();
 startSelfPing();
+checkServer();

@@ -1,15 +1,14 @@
-<<<<<<< HEAD
 require("dotenv").config();
 const puppeteer = require("puppeteer");
-=======
-require("dotenv/config");
-const puppeteer = require("puppeteer-core");
-const chromium = require("chrome-aws-lambda");
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
 const fs = require("fs");
 const path = require("path");
 
-const COOKIE_PATH = path.resolve(__dirname, "cookies.json");
+// Use temp directory for cookies in containerized environment
+const COOKIE_PATH =
+  process.env.NODE_ENV === "production"
+    ? path.resolve("/tmp/puppeteer_cookies", "cookies.json")
+    : path.resolve(__dirname, "cookies.json");
+
 let browser = null;
 let page = null;
 const serverInfo = { status: "unknown", success: false };
@@ -50,27 +49,43 @@ async function cleanup() {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function getCurrentStatus() {
-  await page.waitForSelector(".statuslabel-label", { timeout: 30000 });
+  try {
+    await page.waitForSelector(".statuslabel-label", { timeout: 30000 });
 
-  const currentStatus = await page.$eval(".statuslabel-label", (el) =>
-    el.textContent.trim().toLowerCase()
-  );
-  const waitingPhases = ["loading", "saving", "stopping"];
-  const isInWaitingPhase = waitingPhases.some((phase) =>
-    currentStatus.includes(phase)
-  );
-
-  while (isInWaitingPhase) {
-    console.log(`Server is ${currentStatus}, waiting 5 seconds...`);
-    await delay(5000);
-    const statusAfterDelay = await page.$eval(".statuslabel-label", (el) =>
+    const currentStatus = await page.$eval(".statuslabel-label", (el) =>
       el.textContent.trim().toLowerCase()
     );
 
-    // repeat status check if the staus was unchanged.
-    if (statusAfterDelay === currentStatus) getCurrentStatus();
+    const waitingPhases = ["loading", "saving", "stopping"];
+    const isInWaitingPhase = waitingPhases.some((phase) =>
+      currentStatus.includes(phase)
+    );
+
+    if (isInWaitingPhase) {
+      console.log(`Server is ${currentStatus}, waiting 5 seconds...`);
+      await delay(5000);
+
+      // Check if page is still valid before proceeding
+      if (!page.isClosed()) {
+        const statusAfterDelay = await page.$eval(".statuslabel-label", (el) =>
+          el.textContent.trim().toLowerCase()
+        );
+
+        // Only recursively check if status unchanged
+        if (statusAfterDelay === currentStatus) {
+          return await getCurrentStatus();
+        }
+        return statusAfterDelay;
+      }
+    }
+    return currentStatus;
+  } catch (err) {
+    console.error(`Error getting current status: ${err.message}`);
+    if (err.message.includes("detached") || err.message.includes("closed")) {
+      throw new Error("Page detached or closed");
+    }
+    return "unknown";
   }
-  return currentStatus;
 }
 
 async function logInToAternos() {
@@ -79,96 +94,117 @@ async function logInToAternos() {
     throw new Error("Missing Aternos credentials in environment variables");
   }
 
-<<<<<<< HEAD
   console.log("Launching browser...");
-  browser = await puppeteer.launch({
+  const launchOptions = {
     executablePath:
-      process.env.NODE_ENV === "production"
-        ? process.env.PUPPETEER_EXECUTABLE_PATH
-        : puppeteer.executablePath(),
-=======
-  const executablePath =
-    process.env.PUPPETEER_EXECUTABLE_PATH || (await chromium.executablePath);
-
-  browser = await puppeteer.launch({
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
+      process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-web-security",
-      "--disable-features=IsolateOrigins,site-per-process",
-      "--disable-accelerated-2d-canvas",
-<<<<<<< HEAD
-=======
-      "--no-first-run",
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
-      "--no-zygote",
-      "--single-process",
       "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--no-zygote",
     ],
-<<<<<<< HEAD
-    headless: true,
-=======
-    defaultViewport: { width: 1920, height: 1080 },
-    executablePath: executablePath,
-    headless: true,
+    headless: "new",
     ignoreHTTPSErrors: true,
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
-  });
+    timeout: 90000,
+  };
+
+  console.log(`Using Chrome at: ${launchOptions.executablePath}`);
+  browser = await puppeteer.launch(launchOptions);
 
   page = await browser.newPage();
+  await page.setDefaultNavigationTimeout(60000);
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
   );
+
+  // Create directory for cookies if it doesn't exist
+  const cookieDir = path.dirname(COOKIE_PATH);
+  if (!fs.existsSync(cookieDir)) {
+    fs.mkdirSync(cookieDir, { recursive: true });
+  }
+
   if (fs.existsSync(COOKIE_PATH)) {
+    let cookies;
     try {
-      const cookies = JSON.parse(fs.readFileSync(COOKIE_PATH));
+      cookies = JSON.parse(fs.readFileSync(COOKIE_PATH));
       await page.setCookie(...cookies);
+    } catch (e) {
+      console.warn(
+        "⚠️ Error setting cookies - falling back to full login:",
+        e.message
+      );
+      return await fullLogin();
+    }
+    try {
       await page.goto("https://aternos.org/servers/", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      });
+    } catch (e) {
+      console.warn("⚠️ Navigation error:", e.message);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+    }
+
+    try {
+      await page.waitForSelector(".server-name", { timeout: 10000 });
+      console.log("✅ Logged in using cookies");
+      return true;
+    } catch {
+      console.log(
+        "⚠️ Cookie login failed (selector not found), falling back to full login"
+      );
+      try {
+        fs.unlinkSync(COOKIE_PATH);
+      } catch (err) {
+        console.warn("Could not delete cookie file:", err.message);
+      }
+    }
+  }
+  // perform full login if cookies did not work
+  return await fullLogin();
+
+  async function fullLogin() {
+    console.log("✍️ Performing full login");
+    try {
+      await page.goto("https://aternos.org/go/", {
         waitUntil: "networkidle2",
         timeout: 60000,
       });
-      if (await page.$(".server-name")) {
-        console.log("Logged in using cookies");
-        return true;
+      await page.waitForSelector(".username", { timeout: 10000 });
+      await page.type(".username", ATERNOS_USERNAME);
+
+      await page.waitForSelector(".password", { timeout: 10000 });
+      await page.type(".password", ATERNOS_PASSWORD);
+
+      await Promise.all([
+        page.click(".login-button"),
+        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }),
+      ]);
+
+      if (page.url().includes("go/?login")) {
+        console.error("Login failed: bad credentials or captcha");
+        return false;
       }
-      console.log("⚠️⚠️⚠️ Saved cookies invalid, falling back to login");
-      // fs.unlinkSync(COOKIE_PATH);
+
+      const newCookies = await page.cookies();
+      fs.writeFileSync(COOKIE_PATH, JSON.stringify(newCookies, null, 2));
+      console.log("✅ Cookies saved for future sessions!");
+      return true;
     } catch (err) {
-      console.warn("Error using saved cookies:", err.message);
-      // fs.unlinkSync(COOKIE_PATH);
+      console.error("🔥 Full login process failed:", err);
+      return false;
     }
   }
-
-  console.log("✍️ Performing full login");
-  await page.goto("https://aternos.org/go/", {
-    waitUntil: "networkidle2",
-    timeout: 60000,
-  });
-  await page.type(".username", ATERNOS_USERNAME);
-  await page.type(".password", ATERNOS_PASSWORD);
-
-  await Promise.all([
-    page.click(".login-button"),
-    page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }),
-  ]);
-
-  if (page.url().includes("go/?login")) {
-    console.error("Login failed bad credentials or captcha");
-    return false;
-  }
-
-  const freshCookies = await page.cookies();
-  fs.writeFileSync(COOKIE_PATH, JSON.stringify(freshCookies, null, 2));
-  console.log("Cookies saved for future sessions!");
-  return true;
 }
 
 async function navigateToServer() {
+  console.log("navigating to the servers page");
   try {
     await page.goto("https://aternos.org/servers/", {
-      waitUntil: "networkidle2",
+      waitUntil: "domcontentloaded",
       timeout: 60000,
     });
     await page.waitForSelector(".server-body", { timeout: 30000 });
@@ -177,8 +213,6 @@ async function navigateToServer() {
     await server.click();
     console.log("clicked on the server");
     return { success: true, status: "successfully navigated to server" };
-    {
-    }
   } catch (err) {
     console.error(`Server navigation error: ${err.message}`);
     serverInfo.status = "navigation error";
@@ -186,15 +220,18 @@ async function navigateToServer() {
   }
 }
 
-// Add these constants at the top
-const MAX_SERVER_ATTEMPTS = 5;
-const MAX_QUEUE_CHECKS = 20;
+// Constants
+const MAX_SERVER_ATTEMPTS = 10;
+const MAX_QUEUE_CHECKS = 60;
 
 async function handleServerStatus() {
   let attempts = 0;
   while (attempts < MAX_SERVER_ATTEMPTS) {
     attempts++;
     try {
+      if (page.isClosed()) {
+        throw new Error("Page is closed");
+      }
       const status = await getCurrentStatus();
       console.log(
         `Checking server status (Attempt ${attempts}/${MAX_SERVER_ATTEMPTS}):`,
@@ -208,18 +245,25 @@ async function handleServerStatus() {
 
       if (status === "offline") {
         console.log("Starting server");
-        await page.click("#start");
-        await delay(3000);
-
-        const newStatus = await getCurrentStatus();
-        console.log("Post-start status:", newStatus);
+        const startButton = await page.$("#start");
+        if (startButton) {
+          await startButton.click();
+          await delay(5000);
+          const newStatus = await getCurrentStatus();
+          console.log("Post-start status:", newStatus);
+        } else {
+          console.log("Start button not found");
+        }
       }
+
+      const currentStatus = await getCurrentStatus();
       const isStartingPhase = [
         "loading",
         "starting",
         "saving",
         "preparing",
-      ].some((phase) => status.includes(phase));
+      ].some((phase) => currentStatus.includes(phase));
+
       if (isStartingPhase) {
         console.log("Monitoring starting phase...");
         const phaseResult = await monitorStartingPhase();
@@ -227,7 +271,7 @@ async function handleServerStatus() {
       }
 
       const isWaitingPhase = ["queue", "waiting"].some((phase) =>
-        status.includes(phase)
+        currentStatus.includes(phase)
       );
       if (isWaitingPhase) {
         const queueResult = await handleQueueProcess();
@@ -238,6 +282,38 @@ async function handleServerStatus() {
       await delay(10000);
     } catch (err) {
       console.log("Server status error:", err.message);
+
+      // Try to recover if page is detached
+      if (
+        err.message.includes("detached") ||
+        err.message.includes("closed") ||
+        !page ||
+        page.isClosed()
+      ) {
+        console.log("Attempting to recover from detached/closed page...");
+        try {
+          if (browser && !browser.isConnected()) {
+            await cleanup();
+            return { success: false, error: "Browser disconnected" };
+          }
+
+          // Try to create a new page if browser is still connected
+          if (browser && browser.isConnected()) {
+            page = await browser.newPage();
+            await page.setDefaultNavigationTimeout(60000);
+            await page.setUserAgent(
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+            );
+            await navigateToServer();
+          } else {
+            throw new Error("Browser is not connected");
+          }
+        } catch (recoveryErr) {
+          console.error("Recovery failed:", recoveryErr.message);
+          return { success: false, error: "Recovery failed" };
+        }
+      }
+
       await delay(10000);
     }
   }
@@ -248,14 +324,16 @@ async function handleServerStatus() {
 async function handleQueueProcess() {
   let checks = 0;
   let position = null;
-  while (checks < MAX_QUEUE_CHECKS || position < Infinity) {
+  while (
+    checks < MAX_QUEUE_CHECKS ||
+    position < Infinity ||
+    position === null
+  ) {
     checks++;
     try {
-      console.log(`Queue check ${checks}/${MAX_QUEUE_CHECKS}`);
-      const status = await getCurrentStatus();
-      console.log({ status });
-      if (status === "online") return "online";
-      if (status === "offline") return "offline";
+      if (page.isClosed()) {
+        throw new Error("Page is closed");
+      }
 
       // Confirm button handling
       const confirmButtonExists = await page.evaluate(() => {
@@ -266,27 +344,41 @@ async function handleQueueProcess() {
         const style = window.getComputedStyle(button);
         return style.display === "flex";
       });
-      console.log("confirm button status:", confirmButtonExists);
 
       if (confirmButtonExists) {
         const serverConfirmation = await confirmServerActiviation();
-        console.log({ serverConfirmation });
-        const result = await monitorStartingPhase();
-        if (result === "online") return "online";
+        if (serverConfirmation) {
+          const result = await monitorStartingPhase();
+          if (result === "online") return "online";
+        }
+      }
+
+      console.log(`Queue check ${checks}/${MAX_QUEUE_CHECKS}`);
+      const status = await getCurrentStatus();
+      if (status === "online") return "online";
+      if (status === "offline") return "offline";
+      if (status.includes("preparing") || status.includes("starting")) {
+        console.log("Transitioned from queue to preparing/starting phase");
+        return status;
       }
 
       // Queue position handling
-      const posText = await page
-        .$eval(".queue-position", (el) => el.textContent)
-        .catch(() => "0");
-      position = parseInt(posText.match(/\d+/)?.[0]) || Infinity;
+      try {
+        const posText = await page
+          .$eval(".queue-position", (el) => el.textContent)
+          .catch(() => "0");
+        position = parseInt(posText.match(/\d+/)?.[0]) || Infinity;
 
-      console.log(`Queue position: ${position}`);
+        console.log(`Queue position: ${position}`);
 
-      if (position <= 1) {
-        await confirmServerActiviation();
-        const result = await monitorStartingPhase();
-        if (result === "online") return "online";
+        if (position <= 1) {
+          await confirmServerActiviation();
+          const result = await monitorStartingPhase();
+          if (result === "online") return "online";
+        }
+      } catch (posErr) {
+        console.log("Error getting queue position:", posErr.message);
+        position = Infinity;
       }
 
       // Dynamic waiting
@@ -295,77 +387,83 @@ async function handleQueueProcess() {
       await delay(waitTime);
     } catch (err) {
       console.log("Queue error:", err.message);
+
+      // Check if we need to recover from detached page
+      if (err.message.includes("detached") || err.message.includes("closed")) {
+        throw err; // Propagate to outer handler
+      }
+
       await delay(10000);
     }
   }
-
+  const finalStatus = await getCurrentStatus();
+  if (
+    finalStatus.includes("preparing") ||
+    finalStatus.includes("starting") ||
+    finalStatus === "online"
+  ) {
+    console.log(`Queue exited but server is in valid state: ${finalStatus}`);
+    return finalStatus;
+  }
   throw new Error(
-    `Queue processing failed after ${MAX_QUEUE_CHECKS} checks at poistion ${position}`
+    `Queue processing failed after ${MAX_QUEUE_CHECKS} checks at position ${position}`
   );
 }
 
 async function confirmServerActiviation() {
   try {
+    // Check if page is still valid
+    if (page.isClosed()) {
+      throw new Error("Page is closed");
+    }
+
     // Confirm button
-    await page.waitForSelector("#confirm", { timeout: 30000 });
-    await page.click("#confirm");
-    console.log("✅ Confirmation clicked");
-    await delay(2000);
-<<<<<<< HEAD
-=======
-
-    // // Start button
-    // await page.waitForSelector("#start", { timeout: 30000 });
-    // await page.click("#start");
-    // console.log("▶️ Start clicked");
-
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
-    return "success";
+    const confirmButton = await page.waitForSelector("#confirm", {
+      timeout: 30000,
+    });
+    if (confirmButton) {
+      await confirmButton.click();
+      console.log("✅ Confirm button clicked");
+      await delay(2000);
+      return true;
+    } else {
+      console.log("Confirm button not found");
+      return false;
+    }
   } catch (err) {
     console.log("Activation failed:", err.message);
-    throw err; // Propagate error
+    return false;
   }
 }
 
 async function monitorStartingPhase() {
-<<<<<<< HEAD
-  const status = await getCurrentStatus();
-  console.log(`current status: ${status}`);
-  serverInfo.status = status;
+  try {
+    // Check if page is still valid
+    if (page.isClosed()) {
+      throw new Error("Page is closed");
+    }
 
-  if (status === "online") {
-    console.log("🎉 Server is now ONLINE!");
-    serverInfo.success = true;
-    return "online";
-  }
-  if (s === "offline") {
-    console.log("⚠️ Server went offline during preparing");
-    return "offline";
-  }
+    const status = await getCurrentStatus();
+    console.log(`current status: ${status}`);
+    serverInfo.status = status;
 
-  await delay(10000);
-=======
-  const MAX_CHECKS = 10;
-  for (let i = 0; i < MAX_CHECKS; i++) {
-    const s = await getCurrentStatus();
-    console.log(`Monitor ${i + 1}/${MAX_CHECKS}: ${s}`);
-    serverInfo.status = s;
-
-    if (s === "online") {
+    if (status === "online") {
       console.log("🎉 Server is now ONLINE!");
       serverInfo.success = true;
       return "online";
     }
-    if (s === "offline") {
+    if (status === "offline") {
+      // Fixed typo: s -> status
       console.log("⚠️ Server went offline during preparing");
       return "offline";
     }
 
-    await delay(30000);
+    await delay(10000);
+    return serverInfo.status;
+  } catch (err) {
+    console.log("Error in monitoring phase:", err.message);
+    throw err;
   }
-  console.log("⏲️ Monitor timed out (5min)");
->>>>>>> 6ee530d48c40c5c07906ed0e5fa1c0b075f237ee
-  return serverInfo.status;
 }
 
 module.exports = {
