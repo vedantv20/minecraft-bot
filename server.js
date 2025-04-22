@@ -105,7 +105,7 @@ async function logInToAternos() {
       "--disable-software-rasterizer",
       "--no-zygote",
     ],
-    headless: "new",
+    headless: true,
     ignoreHTTPSErrors: true,
     timeout: 90000,
   });

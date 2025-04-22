@@ -1,8 +1,6 @@
 FROM ghcr.io/puppeteer/puppeteer:24.6.1
 
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false \
-    NODE_ENV=production \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV NODE_ENV=production
 
 WORKDIR /usr/src/app
 
@@ -11,8 +9,9 @@ RUN npm ci --omit=dev
 
 COPY . .
 
-USER root
+RUN sed -i 's/headless: "new"/headless: true/' server.js
 
+USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgbm-dev \
     libxshmfence-dev \
@@ -29,6 +28,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxfixes3 \
     libxrandr2 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create directories and adjust permissions while still root
+RUN mkdir -p /tmp/puppeteer_cookies && chmod 777 /tmp/puppeteer_cookies
+
+# Debugging chrome installation 
+RUN which google-chrome-stable || echo "Chrome not found at expected path"
+RUN ls -la /usr/bin/google-chrome* || echo "No Chrome binaries in /usr/bin"
+RUN find / -name chrome -o -name chromium -o -name "google-chrome*" 2>/dev/null || echo "Chrome not found"
 
 USER pptruser
 
