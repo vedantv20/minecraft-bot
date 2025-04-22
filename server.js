@@ -95,9 +95,8 @@ async function logInToAternos() {
   }
 
   console.log("Launching browser...");
-  const launchOptions = {
-    executablePath:
-      process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+
+  browser = await puppeteer.launch({
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -109,10 +108,7 @@ async function logInToAternos() {
     headless: "new",
     ignoreHTTPSErrors: true,
     timeout: 90000,
-  };
-
-  console.log(`Using Chrome at: ${launchOptions.executablePath}`);
-  browser = await puppeteer.launch(launchOptions);
+  });
 
   page = await browser.newPage();
   await page.setDefaultNavigationTimeout(60000);
