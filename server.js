@@ -97,6 +97,7 @@ async function logInToAternos() {
   console.log("Launching browser...");
 
   browser = await puppeteer.launch({
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -129,7 +130,7 @@ async function logInToAternos() {
       await page.setCookie(...cookies);
     } catch (e) {
       console.warn(
-        "⚠️ Error setting cookies - falling back to full login:",
+        "Error setting cookies - falling back to full login:",
         e.message
       );
       return await fullLogin();
@@ -140,17 +141,17 @@ async function logInToAternos() {
         timeout: 60000,
       });
     } catch (e) {
-      console.warn("⚠️ Navigation error:", e.message);
+      console.warn("Navigation error:", e.message);
       await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
     }
 
     try {
       await page.waitForSelector(".server-name", { timeout: 10000 });
-      console.log("✅ Logged in using cookies");
+      console.log("Logged in using cookies");
       return true;
     } catch {
       console.log(
-        "⚠️ Cookie login failed (selector not found), falling back to full login"
+        "Cookie login failed (selector not found), falling back to full login"
       );
       try {
         fs.unlinkSync(COOKIE_PATH);
@@ -163,7 +164,7 @@ async function logInToAternos() {
   return await fullLogin();
 
   async function fullLogin() {
-    console.log("✍️ Performing full login");
+    console.log("Performing full login");
     try {
       await page.goto("https://aternos.org/go/", {
         waitUntil: "networkidle2",
@@ -187,10 +188,10 @@ async function logInToAternos() {
 
       const newCookies = await page.cookies();
       fs.writeFileSync(COOKIE_PATH, JSON.stringify(newCookies, null, 2));
-      console.log("✅ Cookies saved for future sessions!");
+      console.log("Cookies saved for future sessions!");
       return true;
     } catch (err) {
-      console.error("🔥 Full login process failed:", err);
+      console.error("Full login process failed:", err);
       return false;
     }
   }
