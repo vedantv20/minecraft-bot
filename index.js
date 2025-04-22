@@ -8,6 +8,12 @@ const {
   Movements,
   goals: { GoalNear },
 } = require("mineflayer-pathfinder");
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log(
+  "PUPPETEER_EXECUTABLE_PATH:",
+  process.env.PUPPETEER_EXECUTABLE_PATH
+);
+console.log("Chromium Path:", require("puppeteer").executablePath());
 
 const MIN_CORNER = new Vec3(-306, 183, -14);
 const MAX_CORNER = new Vec3(-297, 185, -4);
