@@ -1,29 +1,25 @@
 require("dotenv/config");
 const http = require("node:http");
 const mineflayer = require("mineflayer");
-const { initiateServer } = require("./server.js");
 const Vec3 = require("vec3");
 const {
   pathfinder,
   Movements,
   goals: { GoalNear },
 } = require("mineflayer-pathfinder");
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log(
-  "PUPPETEER_EXECUTABLE_PATH:",
-  process.env.PUPPETEER_EXECUTABLE_PATH
-);
 console.log("Chromium Path:", require("puppeteer").executablePath());
 
 const MIN_CORNER = new Vec3(-306, 183, -14);
 const MAX_CORNER = new Vec3(-297, 185, -4);
 let bot = null;
+let connectingAttempts = 0;
+const MAX_CONNECT_ATTEMPTS = 3;
 let goingToSleep = false;
 let lastActivity = Date.now();
 let serverCheckAttempts = 0;
 let isShuttingDown = false;
-let isConnecting = false; // Track connection state
-let connectionTimeout = null; // Track connection timeout
+let isConnecting = false;
+let connectionTimeout = null;
 let sleepInterval = null;
 let activityInterval = null;
 
@@ -58,43 +54,19 @@ function gracefulShutdown() {
   }, 5000);
 }
 
-async function checkServer() {
+async function connectToServer() {
   if (isShuttingDown || isConnecting) return;
-
   isConnecting = true;
   try {
-    const server = await initiateServer();
-    serverCheckAttempts++;
-    if (!server || !server.success) {
-      console.log("server error:", server?.error);
-      if (serverCheckAttempts < 5) {
-        console.log("retrying to initiate the server");
-        connectionTimeout = setTimeout(() => {
-          isConnecting = false;
-          checkServer();
-        }, 30000); // Add delay between retries
-      } else {
-        console.log("stopping server initiation.");
-
-        // Reset attempt counter and retry after longer delay
-        serverCheckAttempts = 0;
-        connectionTimeout = setTimeout(() => {
-          isConnecting = false;
-          checkServer();
-        }, 5 * 60 * 1000); // 5 minutes
-      }
-    } else {
-      serverCheckAttempts = 0;
-      console.log("Bot will join the server in few seconds");
-      connectionTimeout = setTimeout(() => {
-        isConnecting = false;
-        createBot();
-      }, 25000);
+    ++connectingAttempts;
+    if (connectingAttempts > MAX_CONNECT_ATTEMPTS) {
+      throw Error("Max connecting attempts reached.");
     }
-  } catch (error) {
-    console.error("Unexpected error in checkServer:", error);
-    isConnecting = false;
-    connectionTimeout = setTimeout(checkServer, 60000);
+    connectionTimeout = setTimeout(() => {
+      createBot();
+    }, 10000);
+  } catch (err) {
+    console.log("unable to connect to server", err.message);
   }
 }
 
@@ -158,8 +130,7 @@ function createBot() {
       console.log("Bot error:", err);
       clearTimeout(spawnTimeout);
       if (!isShuttingDown) {
-        // Don't attempt reconnection during shutdown
-        setTimeout(checkServer, 30000);
+        setTimeout(connectToServer, 30000);
       }
     });
 
@@ -188,10 +159,7 @@ function createBot() {
             parsedReason?.value?.translate?.value ===
               "multiplayer.disconnect.duplicate_login"
           ) {
-            console.log(
-              "Detected duplicate login, waiting longer before reconnecting..."
-            );
-            setTimeout(checkServer, 2 * 60 * 1000); // Wait 2 minutes
+            console.log("Detected duplicate login!");
             return;
           }
 
@@ -207,10 +175,10 @@ function createBot() {
         }
 
         // Default handling for other kick reasons
-        setTimeout(checkServer, 45000);
+        setTimeout(connectToServer, 45000);
       } catch (err) {
         console.log("Error parsing kick reason:", err.message);
-        setTimeout(checkServer, 45000);
+        setTimeout(connectToServer, 45000);
       }
     });
 
@@ -222,16 +190,16 @@ function createBot() {
         // Add progressive delay based on reason
         let delay = 45000;
         if (reason === "socketClosed") {
-          delay = 60000; // Longer delay for connection issues
+          delay = 30000; // Longer delay for connection issues
           console.log("Socket closed, will reconnect with longer delay");
         }
         console.log(`Will attempt reconnection in ${delay / 1000} seconds`);
-        setTimeout(checkServer, delay);
+        setTimeout(connectToServer, delay);
       }
     });
   } catch (err) {
     console.error("Error creating bot:", err);
-    setTimeout(checkServer, 60000); // Retry after 1 minute
+    setTimeout(connectToServer, 30000);
   }
 }
 
@@ -512,4 +480,4 @@ function startSelfPing() {
 
 createHttpServer();
 startSelfPing();
-checkServer();
+connectToServer();
