@@ -96,8 +96,9 @@ async function logInToAternos() {
 
   console.log("Launching browser...");
 
-  browser = await puppeteer.launch({
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+  const launchOptions = {
+    headless: true,
+    ignoreHTTPSErrors: true,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -106,10 +107,15 @@ async function logInToAternos() {
       "--disable-software-rasterizer",
       "--no-zygote",
     ],
-    headless: true,
-    ignoreHTTPSErrors: true,
     timeout: 90000,
-  });
+  };
+
+  if (process.env.NODE_ENV === "production") {
+    launchOptions.executablePath = puppeteer.executablePath();
+  }
+
+  console.log("Launching browser with options:", launchOptions);
+  browser = await puppeteer.launch(launchOptions);
 
   page = await browser.newPage();
   await page.setDefaultNavigationTimeout(60000);
